@@ -31,10 +31,9 @@ config.read(config_path)
 TOKEN = config['TELEGRAM']['TOKEN']
 
 
-def login():
+def login(ptt_bot=None):
 
     max_retry = 5
-    ptt_bot = None
     for retry_time in range(max_retry):
         try:
             ptt_bot = PyPtt.API()
@@ -60,36 +59,6 @@ def login():
 
     return ptt_bot
 
-
-def reLogin(ptt_bot):
-
-    max_retry = 5
-
-    ptt_bot.logout()
-    
-    for retry_time in range(max_retry):
-        try:
-            ID = config.get('PTT','ID')
-            Password = config.get('PTT','Password')
-
-            ptt_bot.login(ID, Password,
-                kick_other_session=False if retry_time == 0 else True)
-            break
-        except PyPtt.exceptions.LoginError:
-            ptt_bot = None
-            print('登入失敗')
-            time.sleep(3)
-        except PyPtt.exceptions.LoginTooOften:
-            ptt_bot = None
-            print('請稍後再試')
-            time.sleep(60)
-        except PyPtt.exceptions.WrongIDorPassword:
-            print('帳號密碼錯誤')
-            raise
-        except Exception as e:
-            print('其他錯誤:', e)
-            break
-    return ptt_bot
 
 def PostDetect(ptt_bot, board, Author):
     count = 0
@@ -140,7 +109,7 @@ def initGreatList(ptt_bot, board):
             progress.update(1)
 
         except PyPtt.exceptions.ConnectionClosed:
-            ptt_bot = reLogin(ptt_bot)
+            ptt_bot = login(ptt_bot)
             continue
 
     great_authors = list(set(great_authors))
