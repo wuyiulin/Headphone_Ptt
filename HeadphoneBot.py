@@ -5,179 +5,223 @@ import configparser
 import telegram.ext
 import requests
 import time
-from PyPtt import PTT
-#from telegram import ext
-
-
-
-
+from datetime import datetime
+import asyncio
+import PyPtt
+import signal
+from tqdm import tqdm
+import pdb
 import logging
-
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
+import json
+from telegram import ForceReply, Update
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 # Enable logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
                     level=logging.INFO)
 
 logger = logging.getLogger(__name__)
+
 # Initial bot by Telegram access token
 
+greatAuthorListPath = 'greatAuthorList.txt'
+config_path = 'config.ini'
 config = configparser.ConfigParser()
-config.read('config.ini')
+config.read(config_path)
+TOKEN = config['TELEGRAM']['TOKEN']
 
-def start(update, context):
-    """Send a message when the command /start is issued."""
-    update.message.reply_text('Hi!')
 
-def echo(update, context):
-    """Echo the user message."""
-    update.message.reply_text(update.message.text)
+def login():
 
-def help(update, context):
-    """Send a message when the command /help is issued."""
-    update.message.reply_text('Help!')
+    max_retry = 5
+    ptt_bot = None
+    for retry_time in range(max_retry):
+        try:
+            ptt_bot = PyPtt.API()
+            ID = config.get('PTT','ID')
+            Password = config.get('PTT','Password')
 
-def cheak(update, context):
-    """Send a message when the command /cheak is issued."""
-    PTTBot = PTT.API()
+            ptt_bot.login(ID, Password,kick_other_session=False if retry_time == 0 else True)
+            break
+        except PyPtt.exceptions.LoginError:
+            ptt_bot = None
+            print('登入失敗')
+            time.sleep(3)
+        except PyPtt.exceptions.LoginTooOften:
+            ptt_bot = None
+            print('請稍後再試')
+            time.sleep(60)
+        except PyPtt.exceptions.WrongIDorPassword:
+            print('帳號密碼錯誤')
+            raise
+        except Exception as e:
+            print('其他錯誤:', e)
+            break
+
+    return ptt_bot
+
+
+def reLogin(ptt_bot):
+
+    max_retry = 5
+
+    ptt_bot.logout()
     
-    ID = config.get('PTT','ID')
-    Password = config.get('PTT','Password')
+    for retry_time in range(max_retry):
+        try:
+            ID = config.get('PTT','ID')
+            Password = config.get('PTT','Password')
 
-    trade_info = [
-    ('Headphone', PTT.data_type.post_search_type.KEYWORD, '[交易]')
-    ]
+            ptt_bot.login(ID, Password,
+                kick_other_session=False if retry_time == 0 else True)
+            break
+        except PyPtt.exceptions.LoginError:
+            ptt_bot = None
+            print('登入失敗')
+            time.sleep(3)
+        except PyPtt.exceptions.LoginTooOften:
+            ptt_bot = None
+            print('請稍後再試')
+            time.sleep(60)
+        except PyPtt.exceptions.WrongIDorPassword:
+            print('帳號密碼錯誤')
+            raise
+        except Exception as e:
+            print('其他錯誤:', e)
+            break
+    return ptt_bot
+
+def PostDetect(ptt_bot, board, Author):
+    count = 0
+    target_label = '交易'
+    author_newset_postindex = ptt_bot.get_newest_index(index_type=PyPtt.NewIndex.BOARD, board=board, search_type=PyPtt.SearchType.AUTHOR, search_condition=Author)
+    index = author_newset_postindex
+    
+    while(index > 0):
+        post_info = ptt_bot.get_post(board=board, index=index, search_type=PyPtt.SearchType.AUTHOR, search_condition=Author, query = True)
+        match = re.search(r'\[(.*?)\]', post_info['title'])
+        if match:
+            label = match.group(1)
+            if(label != target_label):
+                count += 1
+        else:
+            print("這篇文章沒有分類")
+        if(count >= 3):
+            break
+        index -= 1
+    print("發布交易的作者: {}".format(Author))
+    print("計數器狀態: {}".format(count))
+    return count
+        
+    
+def initGreatList(ptt_bot, board):
+    least_mark_index = int(config.get('Headphone','least_mark_index'))
+    newest_mark_index = ptt_bot.get_newest_index(index_type=PyPtt.NewIndex.BOARD, board=board, search_type=PyPtt.SearchType.MARK, search_condition='m')
+    progress = tqdm(total=newest_mark_index)
 
     try:
-        PTTBot.login(ID, Password, kick_other_login=True)
-    except PTT.exceptions.LoginError:
-        PTTBot.log('登入失敗')
-        sys.exit()
-    except PTT.exceptions.WrongIDorPassword:
-        PTTBot.log('帳號密碼錯誤')
-        sys.exit()
-    except PTT.exceptions.LoginTooOften:
-        PTTBot.log('請稍等一下再登入')
-        sys.exit()
-    PTTBot.log('登入成功')
-    update.message.reply_text('登入成功')
+        with open(greatAuthorListPath, "r") as GALF:
+            great_authors = list(json.load(GALF))
+    except FileNotFoundError:
+        print("好作者列表 JSON檔案 未找到")
+        great_authors = []
+    except json.decoder.JSONDecodeError:
+        print("好作者列表 JSON數據 解碼錯誤")
+        great_authors = []
+    mark_index = newest_mark_index
+    while(mark_index > least_mark_index):
+        try:
+            post_info = ptt_bot.get_post(board=board, index=mark_index, search_type=PyPtt.SearchType.MARK, search_condition='m', query = True)
+            Author = post_info['author']
+            # Author = re.match(r'(?<!\()\s*([a-zA-Z0-9]+)', post_info['author'])
+            # Author = Author.group()
+            great_authors.append(Author)
+            mark_index -= 1
+            progress.update(1)
 
-    for (trade_board, search_type, condition) in trade_info:
-        index = PTTBot.get_newest_index(
-            PTT.data_type.index_type.BBS,
-            trade_board,
-            search_type=search_type,
-            search_condition=condition,
-        )
-        print(f'{trade_board} 最新關鍵字[交易]的文章編號為 {index}')
+        except PyPtt.exceptions.ConnectionClosed:
+            ptt_bot = reLogin(ptt_bot)
+            continue
+
+    great_authors = list(set(great_authors))
+    great_authors.sort()
+    with open(greatAuthorListPath, "w") as GALF:
+        json.dump(great_authors, GALF)
+    least_mark_index = newest_mark_index
+    config['Headphone']['least_mark_index'] = str(least_mark_index)
+    with open(config_path, 'w') as configfile:
+        config.write(configfile)
+    print("優秀作者名單建立完成！")
+    return great_authors
 
 
 
-        post = PTTBot.get_post(
-            trade_board,
-            post_index=index,
-            search_type=search_type,
-            search_condition=condition,
-        )
 
-        print('標題:')
-        print(post.title)
-        print('作者:')
-        print(post.author)
-        print('內文:')
-        print(post.content)
-        print('=' * 50)
+def Bucket(ptt_bot):
+    detect_time = time.time()
+    least_time = int(config.get('Headphone','least_time'))
+    board = 'Headphone'
+    target_label = '交易'
+    bucket_days_list = [360, 180, 90]
+    newest_index = ptt_bot.get_newest_index(PyPtt.NewIndex.BOARD, board)
+    post_time = int(detect_time+1)
+    great_list = initGreatList(ptt_bot, board)
 
-        #檢查可疑文章的作者在耳機板發了幾篇文章#
-        post_autor = re.sub(u"\\(.*?\\)|\\{.*?}|\\[.*?]", "", post.author)
-        print(f'{post_autor} 根據正規表示法解碼後的作者ID ')
-        author_cheak = [
-        ('Headphone', PTT.data_type.post_search_type.AUTHOR, post_autor)
-        ]        
-        for (author_board, search_type, condition) in author_cheak:
-            index = PTTBot.get_newest_index(
-                PTT.data_type.index_type.BBS,
-                author_board,
-                search_type=search_type,
-                search_condition=condition,
-            )
-            print(f'他在 {author_board} 板發了 {index} 篇文章')
-            
-            #查詢這篇可疑的文章#
-            post_D_info = PTTBot.get_post(
-                author_board,
-                post_index = index,
-                search_type=search_type,
-                search_condition=condition,
-            )
-            
-            print('=' * 10 +'這是一篇可疑的文章'+ '=' * 10)
-            print('標題:')
-            print(post_D_info.title)
-            print('作者:')
-            print(post_D_info.author)
-            print('內文:')
-            print(post_D_info.content)
-            print('=' * 50)
-            
+    while((post_time - least_time) > 0):
+        post_info = ptt_bot.get_post(board, index=newest_index)
+        print("現在檢測到 Index: {} 的文章".format(newest_index))
+        newest_index -= 1
 
-            if (index==1):
-                print('這篇要被刪除的文章AID是:' + post_D_info.aid)
-                post_D_info.author = re.sub(u"\\(.*?\\)|\\{.*?}|\\[.*?]", "", post_D_info.author)
-                mark_type = PTT.data_type.mark_type.D
-                PTTBot.mark_post(
-                    mark_type,
-                    'Headphone',
-                    # AID 與 index 擇一使用
-                    post_aid = post_D_info.aid,
-                    # Postindex 可搭配 SearchType and SearchCondition 使用
-                )
-
-                mark_type = PTT.data_type.mark_type.DeleteD
-                PTTBot.mark_post(
-                    mark_type,
-                    'Headphone',
-                    post_aid = post_D_info.aid,
-                )
-                PTTBot.bucket(
-                    # 看板
-                    'Headphone',
-                    # 幾天，請自行轉換成天數
-                    360,
-                    # 水桶原因
-                    '板規一、a、1，未滿三篇非交易文不得發表交易文。',
-                    # 水桶對象
-                    post_D_info.author
-                )
-                update.message.reply_text('機器人剛剛幫你水桶了一個人')
-                update.message.reply_text('被水桶的ID是 ：'+ post_D_info.author)
-                update.message.reply_text('被水桶的AID是：'+ post_D_info.aid)
-                update.message.reply_text('水桶的原因是：板規一、a、1，未滿三篇非交易文不得發表交易文。')
+        
+        if(post_info[PyPtt.PostField.post_status] != PyPtt.PostStatus.EXISTS):
+            print("這篇文章被刪除了！")
+            continue
+        elif(post_info['author'] in great_list):
+            print("這作者是好人！")
+            continue
+        else:
+            # 取得文章發布時間
+            match_label = re.search(r'\[(.*?)\]', post_info['title'])
+            if match_label:
+                label = match_label.group(1)
+                if(label != target_label):
+                    continue
+            date_string = post_info['date']
+            date_object = datetime.strptime(date_string, "%a %b %d %H:%M:%S %Y")
+            post_time = datetime.timestamp(date_object)
+            print("Detect time {}".format(int(detect_time)))
+            print("Post time {}".format(int(post_time)))
+            matchAuthor = re.match(r'(?<!\()\s*([a-zA-Z0-9]+)', post_info['author'])
+            if matchAuthor:
+                Author = matchAuthor.group()
+                Detect_result = PostDetect(ptt_bot, board, Author)
+                if(Detect_result >= 3):
+                    print("這作者 {} 有發滿三篇非交易文！".format(Author))
+                    continue
+                else:
+                    # 這邊寫水桶程式
+                    print("這作者 {} 該桶！".format(Author))
+                    # ptt_bot.bucket(board=board, bucket_days=bucket_days_list[Detect_result], reason='違反板規一', ptt_id=Author)
+                    continue
             else:
-                update.message.reply_text('現在沒有人違規 開心')
-                                
+                print("這個作者怪怪的，直接跳過。")
+                continue
+        
+        
+    least_time = detect_time
+    config['Headphone']['least_time'] = str(int(least_time))
+    with open(config_path, 'w') as configfile:
+        config.write(configfile)
+    print("檢測完成，任務結束！")
+        
 
-
-    time.sleep(3)
-    PTTBot.logout()
-
-
-
-def error(update, context):
-    """Log Errors caused by Updates."""
-    logger.warning('Update "%s" caused error "%s"', update, context.error)
+def HeadphoneBot():
+    ptt_bot = login()
+    Bucket(ptt_bot)
+    ptt_bot.logout()
 
 def main():
-    
-    TOKEN = config.get('HeadphoneBot','ACCESS_TOKEN')
-    updater = Updater(token=TOKEN, use_context=True)
-    dp = updater.dispatcher
-    dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(CommandHandler("help", help))
-    dp.add_handler(CommandHandler("cheak", cheak))
-    dp.add_handler(MessageHandler(Filters.text, echo))
-    updater.start_polling()
-    updater.idle()
+    HeadphoneBot()
 
 if __name__ == '__main__':
     main()
