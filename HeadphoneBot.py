@@ -26,9 +26,10 @@ logger = logging.getLogger(__name__)
 
 greatAuthorListPath = 'greatAuthorList.txt'
 config_path = 'config.ini'
+buckerList_path = 'bucketList.txt'
 config = configparser.ConfigParser()
 config.read(config_path)
-TOKEN = config['TELEGRAM']['TOKEN']
+# TOKEN = config['TELEGRAM']['TOKEN']
 
 
 def login(ptt_bot=None):
@@ -141,11 +142,16 @@ def Bucket(ptt_bot):
         print("現在檢測到 Index: {} 的文章".format(newest_index))
         newest_index -= 1
 
-        
+        # 初始化作者
+        Author = post_info['author']
+        matchAuthor = re.match(r'(?<!\()\s*([a-zA-Z0-9]+)', post_info['author'])
+        if matchAuthor:
+            Author = matchAuthor.group()
+
         if(post_info[PyPtt.PostField.post_status] != PyPtt.PostStatus.EXISTS):
             print("這篇文章被刪除了！")
             continue
-        elif(post_info['author'] in great_list):
+        elif(Author in great_list):
             print("這作者是好人！")
             continue
         else:
@@ -153,7 +159,7 @@ def Bucket(ptt_bot):
             match_label = re.search(r'\[(.*?)\]', post_info['title'])
             if match_label:
                 label = match_label.group(1)
-                if(label != target_label):
+                if(label != target_label or label ==''):
                     continue
             date_string = post_info['date']
             date_object = datetime.strptime(date_string, "%a %b %d %H:%M:%S %Y")
@@ -171,6 +177,8 @@ def Bucket(ptt_bot):
                     # 這邊寫水桶程式
                     print("這作者 {} 該桶！".format(Author))
                     # ptt_bot.bucket(board=board, bucket_days=bucket_days_list[Detect_result], reason='違反板規一', ptt_id=Author)
+                    with open(buckerList_path, 'a') as file:
+                        file.write("Date: {}, UID: {}\n".format(date_object, Author))
                     continue
             else:
                 print("這個作者怪怪的，直接跳過。")
@@ -188,6 +196,11 @@ def HeadphoneBot():
     ptt_bot = login()
     Bucket(ptt_bot)
     ptt_bot.logout()
+
+# def TelegramBot_log(bucket_list):
+#     config = configparser.ConfigParser()
+#     config.read('config.ini')
+#     TOKEN = config['TELEGRAM']['TOKEN']
 
 def main():
     HeadphoneBot()
