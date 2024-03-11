@@ -176,7 +176,7 @@ def Bucket(ptt_bot):
                 else:
                     # 這邊寫水桶程式
                     print("這作者 {} 該桶！".format(Author))
-                    # ptt_bot.bucket(board=board, bucket_days=bucket_days_list[Detect_result], reason='違反板規一', ptt_id=Author)
+                    ptt_bot.bucket(board=board, bucket_days=bucket_days_list[Detect_result], reason='違反板規一', ptt_id=Author)
                     with open(buckerList_path, 'a') as file:
                         file.write("Date: {}, UID: {}\n".format(date_object, Author))
                     continue
